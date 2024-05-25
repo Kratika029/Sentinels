@@ -294,7 +294,7 @@ def fetch_and_normalize_weather_for_grid(grid_size: int, start_location, end_loc
 
     for i in range(grid_size):
         for j in range(grid_size):
-            lat, lon = grid_to_real(i, j, start_location, end_location, grid_size=7) 
+            lat, lon = grid_to_real(i, j, start_location, end_location, grid_size=grid_size) 
 
             weather_score = fetch_weather_data(lat, lon)
             # weather_score = random.uniform(0, 1)
@@ -346,7 +346,7 @@ def fetch_and_normalize_weather_for_grid(grid_size: int, start_location, end_loc
 
     scaled_weather_scores_matrix = scaled_weather_scores_flattened.reshape(weather_conditions.shape)
 
-    return scaled_weather_scores_matrix, weather_conditions, weather_data_for_frontend, sigmets_identified
+    return scaled_weather_scores_matrix, weather_conditions, weather_data_for_frontend, sigmets_identified, (weather_scaler.data_min_, weather_scaler.data_max_)
 
 def min_max_scaling(arr):
     min_val = np.min(arr)
@@ -370,7 +370,7 @@ def get_optimal_route(start_point, end_point, weather_conditions, grid_size=7):
         final_output.append({
             'coordinates': path,
             'rating':scaled_ratings[i],
-            'description':"just another random text"
+            'description':"Description for Route " + str(i+1)
         })
         
     final_output = sorted(final_output, key = lambda x: x['rating'])
@@ -440,7 +440,7 @@ def visualize_real_world_map(paths, start_point, end_point, weather_points):
 def getFlightbyId():
     data = request.json
     flight_id = str(data['flightid']).upper()
-
+    grid_size = data.get('grid_size', 7)
     # data = {
     #         "flights": [
     #             {
@@ -546,6 +546,7 @@ def getFlightbyId():
             },
             "altitude": altitude,
             "fa_flight_id": fa_flight_id,
+            'grid_size' : grid_size,
         }
     
     # Some redundant, toxic, not at all required, totally out of the world code ahead!
@@ -556,8 +557,8 @@ def getFlightbyId():
     # response_route = requests.post('http://localhost:5005/get_routes', data=json.dumps(flight_final_data), headers=headers)
     # if response_route.status_code != 200:
         # return jsonify("An Error Occured in Sub-Route"), 400
-
-    return jsonify(get_routes_local_function(flight_final_data)), 200
+    output, code = get_routes_local_function(flight_final_data)
+    return jsonify(output), code, 
 
 
 # @app.route('/get_routes', methods=['POST'])
@@ -588,15 +589,19 @@ def get_routes_local_function(data):
     start_point = (data['start_point']['lat'], data['start_point']['lon'])
     end_point = (data['end_point']['lat'], data['end_point']['lon'])
         
-    grid_size = 7
+    grid_size = data.get('grid_size', 7)
 
     altitude = data['altitude']
 
-    # scaled_weather = actual_weather = create_weather_patches(grid_size, num_patches=7, max_radius=4)
+    scaled_weather, actual_weather, map_scaled_weather, sigmets_identified, minmax = fetch_and_normalize_weather_for_grid(grid_size, start_point, end_point, altitude)    
+    
+    if minmax[1] < 0.5:
+        return {
+            'error_msg': "The entire Weather Matrix indicates that the path is not suitable for the Flying",
+            'weather_conditions': map_scaled_weather,
+        }, 305
 
-    scaled_weather, actual_weather, map_scaled_weather, sigmets_identified = fetch_and_normalize_weather_for_grid(grid_size, start_point, end_point, altitude)    
-
-    final_output = get_optimal_route(start_point, end_point, scaled_weather)
+    final_output = get_optimal_route(start_point, end_point, scaled_weather, grid_size=grid_size)
         
     visualize_real_world_map(final_output, start_point, end_point, actual_weather)
     
@@ -606,7 +611,7 @@ def get_routes_local_function(data):
         'routes': final_output,
         'weather_conditions': map_scaled_weather,
         'sigmets':sigmets_identified,
-    }
+    }, 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True, port=5005)
